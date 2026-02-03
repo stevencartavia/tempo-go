@@ -42,6 +42,10 @@ type SerializeOptions struct {
 
 	// Sender is the sender address, required when Format is FormatFeePayer.
 	Sender common.Address
+
+	// ForSigning indicates this is for computing a signing hash (not final broadcast).
+	// When true and fee payer is involved, fee_token is skipped per Tempo spec.
+	ForSigning bool
 }
 
 // Serialize serializes a TempoTransaction to hex string.
@@ -82,13 +86,20 @@ func buildRLPList(tx *Tx, opts *SerializeOptions) ([]interface{}, error) {
 	// Field 5: accessList
 	rlpList = append(rlpList, encodeAccessList(tx.AccessList))
 
+	// Per Tempo spec: skip fee_token in sender's signing payload when fee payer is involved.
+	// This allows the fee payer to specify the fee token without invalidating sender's signature.
+	// - Only skip when computing sender's signing hash (ForSigning=true, FormatNormal, fee payer involved)
+	// - Fee payer format (0x78): always include fee_token (fee payer commits to it)
+	// - Final broadcast: always include fee_token
+	skipFeeToken := opts.ForSigning && opts.Format == FormatNormal && (tx.AwaitingFeePayer || tx.FeePayerSignature != nil)
+
 	// Fields 6-10: Nonce, validity, and fee token
 	rlpList = append(rlpList,
 		bigIntToBytes(tx.NonceKey),
 		uint64ToBytes(tx.Nonce),
 		uint64ToBytes(tx.ValidBefore),
 		uint64ToBytes(tx.ValidAfter),
-		encodeFeeToken(tx.FeeToken),
+		encodeFeeTokenConditional(tx.FeeToken, skipFeeToken),
 	)
 
 	// Field 11: feePayerSignatureOrSender
@@ -116,6 +127,16 @@ func encodeFeeToken(token common.Address) []byte {
 		return token.Bytes()
 	}
 	return []byte{}
+}
+
+// encodeFeeTokenConditional encodes the fee token, optionally skipping it.
+// Per Tempo spec, fee_token is skipped (encoded as 0x80/empty) when fee payer is involved
+// in the sender's signing payload, allowing the fee payer to specify the fee token.
+func encodeFeeTokenConditional(token common.Address, skip bool) []byte {
+	if skip {
+		return []byte{}
+	}
+	return encodeFeeToken(token)
 }
 
 // encodeFeePayerField encodes field 11 (feePayerSignatureOrSender).
@@ -165,19 +186,37 @@ func encodeWithPrefix(rlpList []interface{}, format SerializeFormat) (string, er
 }
 
 // SerializeForSigning serializes a transaction for sender signing (without signatures).
+// Per Tempo Transaction spec (https://docs.tempo.xyz/protocol/transactions/spec-tempo-transaction):
+//   - fee_token is SKIPPED (encoded as 0x80) when fee payer is involved
+//   - fee_token is INCLUDED when no fee payer (self-paid transaction)
+//   - feePayerSignatureOrSender field encoding:
+//   - If AwaitingFeePayer=true or FeePayerSignature is set: uses 0x00 marker
+//   - Otherwise: uses empty bytes (0x80)
+//
+// This allows the fee payer to specify the fee token without invalidating the sender's signature.
 func SerializeForSigning(tx *Tx) (string, error) {
-	// Create a copy without signatures
 	txCopy := *tx
 	txCopy.Signature = nil
 	txCopy.FeePayerSignature = nil
 
-	return Serialize(&txCopy, &SerializeOptions{Format: FormatNormal})
+	// Per Tempo spec: if the original tx has fee payer involvement (AwaitingFeePayer=true
+	// or FeePayerSignature present), the sender signed with 0x00 marker and fee_token skipped.
+	// Preserve this for verification.
+	if tx.AwaitingFeePayer || tx.FeePayerSignature != nil {
+		txCopy.AwaitingFeePayer = true
+	}
+
+	return Serialize(&txCopy, &SerializeOptions{Format: FormatNormal, ForSigning: true})
 }
 
 // SerializeForFeePayerSigning serializes a transaction for fee payer signing.
 // This uses the 0x78 prefix and includes the sender address.
 // IMPORTANT: Must remove BOTH sender and fee payer signatures (per tempo.ts reference).
 func SerializeForFeePayerSigning(tx *Tx, sender common.Address) (string, error) {
+	if sender == (common.Address{}) {
+		return "", fmt.Errorf("sender address is required for fee payer signing")
+	}
+
 	// Create a copy without signatures
 	txCopy := *tx
 	txCopy.Signature = nil         // Remove sender signature (required by tempo.ts)
@@ -265,44 +304,51 @@ func encodeSignature(sig *signer.Signature) []interface{} {
 	}
 }
 
-// encodeSignatureEnvelope encodes a signature envelope to RLP.
+// encodeSignatureEnvelope encodes a signature envelope.
+// Per Tempo Transaction spec, signature types are detected by length and type prefix:
+// - secp256k1: raw 65 bytes (r || s || yParity) - no type prefix
+// - keychain: raw bytes (0x03 || user_address || inner_sig) - type prefix 0x03
+// - p256: raw bytes (0x01 || signature data) - type prefix 0x01
+// - webauthn: raw bytes (0x02 || webauthn_data) - type prefix 0x02
 func encodeSignatureEnvelope(envelope *signer.SignatureEnvelope) ([]byte, error) {
 	if envelope == nil {
 		return []byte{}, nil
 	}
 
-	// Handle keychain signatures (raw bytes)
-	if envelope.Type == "keychain" && envelope.Raw != nil {
-		return envelope.Raw, nil
-	}
-
-	// For other types, we need a parsed signature
-	if envelope.Signature == nil {
-		return []byte{}, nil
-	}
-
-	if envelope.Type == "secp256k1" {
-		result := make([]byte, 65)
+	// secp256k1: raw 65 bytes (no type prefix)
+	if envelope.Type == "secp256k1" || envelope.Type == "" {
+		if envelope.Signature == nil {
+			return nil, fmt.Errorf("secp256k1 signature envelope has no parsed signature")
+		}
 
 		rBytes := envelope.Signature.R.Bytes()
-		copy(result[32-len(rBytes):32], rBytes)
+		if len(rBytes) > 32 {
+			return nil, fmt.Errorf("signature R exceeds 32 bytes: got %d", len(rBytes))
+		}
 
 		sBytes := envelope.Signature.S.Bytes()
-		copy(result[64-len(sBytes):64], sBytes)
+		if len(sBytes) > 32 {
+			return nil, fmt.Errorf("signature S exceeds 32 bytes: got %d", len(sBytes))
+		}
 
+		if envelope.Signature.YParity > 1 {
+			return nil, fmt.Errorf("invalid yParity: must be 0 or 1, got %d", envelope.Signature.YParity)
+		}
+
+		result := make([]byte, 65)
+		copy(result[32-len(rBytes):32], rBytes)
+		copy(result[64-len(sBytes):64], sBytes)
 		result[64] = envelope.Signature.YParity
 
 		return result, nil
 	}
 
-	sigTuple := encodeSignature(envelope.Signature)
-
-	envelopeRLP := []interface{}{
-		[]byte(envelope.Type),
-		sigTuple,
+	// keychain, p256, webauthn: use raw bytes directly (already includes type prefix)
+	if envelope.Raw != nil {
+		return envelope.Raw, nil
 	}
 
-	return rlp.EncodeToBytes(envelopeRLP)
+	return nil, fmt.Errorf("signature envelope type %q has no raw bytes", envelope.Type)
 }
 
 // bigIntToBytes converts a *big.Int to bytes, returning empty bytes for nil or 0.

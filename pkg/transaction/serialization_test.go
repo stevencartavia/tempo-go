@@ -689,3 +689,177 @@ func hexToBigInt(s string) *big.Int {
 	n.SetString(s[2:], 16) // Remove 0x prefix
 	return n
 }
+
+// TestSerializeForSigning_SponsoredTransaction verifies that sponsored transactions
+// follow the Tempo Transaction spec (https://docs.tempo.xyz/protocol/transactions/spec-tempo-transaction):
+// - fee_token is SKIPPED (encoded as 0x80/empty) when fee payer is involved
+// - fee_payer_signature field uses 0x00 marker
+// This allows the fee payer to specify the fee token without invalidating sender's signature.
+func TestSerializeForSigning_SponsoredTransaction(t *testing.T) {
+	feeToken := common.HexToAddress("0x20c0000000000000000000000000000000000001")
+
+	t.Run("awaiting fee payer mode", func(t *testing.T) {
+		tx := &Tx{
+			ChainID:              big.NewInt(42424),
+			MaxPriorityFeePerGas: big.NewInt(1000000),
+			MaxFeePerGas:         big.NewInt(2000000),
+			Gas:                  21000,
+			Calls: []Call{
+				{
+					To:    addrPtr(common.HexToAddress("0x1234567890123456789012345678901234567890")),
+					Value: big.NewInt(1000000),
+					Data:  []byte{},
+				},
+			},
+			AccessList:       AccessList{},
+			NonceKey:         big.NewInt(0),
+			Nonce:            1,
+			FeeToken:         feeToken,
+			AwaitingFeePayer: true,
+		}
+
+		serialized, err := SerializeForSigning(tx)
+		assert.NoError(t, err)
+
+		deserialized, err := Deserialize(serialized)
+		assert.NoError(t, err)
+
+		// Per Tempo spec: fee_token is SKIPPED in sender's signing payload when fee payer is involved
+		assert.Equal(t, common.Address{}, deserialized.FeeToken, "Sponsored tx signing payload should skip fee token")
+		// Per Tempo spec: when feePayerSignature will be present, sender signs with 0x00 marker
+		assert.True(t, deserialized.AwaitingFeePayer, "Sponsored tx should have 0x00 marker (AwaitingFeePayer=true)")
+	})
+
+	t.Run("with fee payer signature present", func(t *testing.T) {
+		tx := &Tx{
+			ChainID:              big.NewInt(42424),
+			MaxPriorityFeePerGas: big.NewInt(1000000),
+			MaxFeePerGas:         big.NewInt(2000000),
+			Gas:                  21000,
+			Calls: []Call{
+				{
+					To:    addrPtr(common.HexToAddress("0x1234567890123456789012345678901234567890")),
+					Value: big.NewInt(1000000),
+					Data:  []byte{},
+				},
+			},
+			AccessList:        AccessList{},
+			NonceKey:          big.NewInt(0),
+			Nonce:             1,
+			FeeToken:          feeToken,
+			FeePayerSignature: signer.NewSignature(big.NewInt(789), big.NewInt(101), 1),
+		}
+
+		serialized, err := SerializeForSigning(tx)
+		assert.NoError(t, err)
+
+		deserialized, err := Deserialize(serialized)
+		assert.NoError(t, err)
+
+		// Per Tempo spec: fee_token is SKIPPED in sender's signing payload when fee payer is involved
+		assert.Equal(t, common.Address{}, deserialized.FeeToken, "Sponsored tx signing payload should skip fee token")
+		// Per Tempo spec: when fee payer signature exists, the sender signed with 0x00 marker
+		assert.True(t, deserialized.AwaitingFeePayer, "Sponsored tx should have 0x00 marker (AwaitingFeePayer=true)")
+	})
+
+	t.Run("non-sponsored transaction keeps fee token", func(t *testing.T) {
+		feeToken := common.HexToAddress("0x20c0000000000000000000000000000000000001")
+		tx := &Tx{
+			ChainID:              big.NewInt(42424),
+			MaxPriorityFeePerGas: big.NewInt(1000000),
+			MaxFeePerGas:         big.NewInt(2000000),
+			Gas:                  21000,
+			Calls: []Call{
+				{
+					To:    addrPtr(common.HexToAddress("0x1234567890123456789012345678901234567890")),
+					Value: big.NewInt(1000000),
+					Data:  []byte{},
+				},
+			},
+			AccessList:       AccessList{},
+			NonceKey:         big.NewInt(0),
+			Nonce:            1,
+			FeeToken:         feeToken,
+			AwaitingFeePayer: false,
+		}
+
+		serialized, err := SerializeForSigning(tx)
+		assert.NoError(t, err)
+
+		deserialized, err := Deserialize(serialized)
+		assert.NoError(t, err)
+
+		assert.Equal(t, feeToken, deserialized.FeeToken, "Non-sponsored tx should preserve fee token")
+		assert.False(t, deserialized.AwaitingFeePayer, "Non-sponsored tx should not have awaiting fee payer marker")
+	})
+}
+
+// TestSerializeForFeePayerSigning_ZeroSender verifies that zero sender address is rejected.
+func TestSerializeForFeePayerSigning_ZeroSender(t *testing.T) {
+	tx := &Tx{
+		ChainID:  big.NewInt(42424),
+		Gas:      21000,
+		NonceKey: big.NewInt(0),
+		Calls: []Call{
+			{
+				To:    addrPtr(common.HexToAddress("0x1234567890123456789012345678901234567890")),
+				Value: big.NewInt(0),
+				Data:  []byte{},
+			},
+		},
+	}
+
+	_, err := SerializeForFeePayerSigning(tx, common.Address{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "sender address is required")
+}
+
+// TestKeychainSignatureRoundtrip verifies keychain signatures can be serialized and deserialized.
+// Per Tempo Transaction spec, keychain format is: 0x03 + user_address (20 bytes) + inner_sig (65 bytes) = 86 bytes
+func TestKeychainSignatureRoundtrip(t *testing.T) {
+	// Build a proper 86-byte keychain signature:
+	// - Type prefix: 0x03
+	// - User address: 20 bytes
+	// - Inner signature (r || s || yParity): 65 bytes
+	rawKeychainSig := make([]byte, 86)
+	rawKeychainSig[0] = 0x03 // Type prefix
+	// User address (bytes 1-20)
+	copy(rawKeychainSig[1:21], common.HexToAddress("0xabcdabcdabcdabcdabcdabcdabcdabcdabcdabcd").Bytes())
+	// Inner signature R (bytes 21-52)
+	copy(rawKeychainSig[21:53], common.Hex2Bytes("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"))
+	// Inner signature S (bytes 53-84)
+	copy(rawKeychainSig[53:85], common.Hex2Bytes("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"))
+	// Inner signature yParity (byte 85)
+	rawKeychainSig[85] = 0x01
+
+	tx := &Tx{
+		ChainID:              big.NewInt(42424),
+		MaxPriorityFeePerGas: big.NewInt(1000000),
+		MaxFeePerGas:         big.NewInt(2000000),
+		Gas:                  21000,
+		Calls: []Call{
+			{
+				To:    addrPtr(common.HexToAddress("0x1234567890123456789012345678901234567890")),
+				Value: big.NewInt(1000000),
+				Data:  []byte{},
+			},
+		},
+		AccessList: AccessList{},
+		NonceKey:   big.NewInt(0),
+		Nonce:      1,
+		Signature: &signer.SignatureEnvelope{
+			Type: "keychain",
+			Raw:  rawKeychainSig,
+		},
+	}
+
+	serialized, err := Serialize(tx, nil)
+	assert.NoError(t, err)
+
+	deserialized, err := Deserialize(serialized)
+	assert.NoError(t, err)
+
+	assert.NotNil(t, deserialized.Signature)
+	assert.Equal(t, "keychain", deserialized.Signature.Type)
+	assert.Equal(t, rawKeychainSig, deserialized.Signature.Raw, "Keychain signature raw bytes should round-trip")
+}
