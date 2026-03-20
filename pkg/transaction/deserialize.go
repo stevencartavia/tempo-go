@@ -14,25 +14,31 @@ import (
 // Deserialize parses a serialized TempoTransaction.
 // The serialized transaction must start with TempoTransaction prefix "0x76".
 //
-// RLP Structure (from tempo.ts):
+// RLP Structure:
 // [
 //
-//	chainId,
-//	maxPriorityFeePerGas,
-//	maxFeePerGas,
-//	gas,
-//	calls,                    // Array of [to, value, data] tuples
-//	accessList,               // Array of [address, [storageKeys]] tuples
-//	nonceKey,
-//	nonce,
-//	validBefore,
-//	validAfter,
-//	feeToken,
-//	feePayerSignatureOrSender,  // Signature [yParity, r, s] or "0x00" or empty
-//	authorizationList,          // Empty array for now
-//	signatureEnvelope           // Sender's signature
+//	chainId,                      // 0
+//	maxPriorityFeePerGas,         // 1
+//	maxFeePerGas,                 // 2
+//	gas,                          // 3
+//	calls,                        // 4  Array of [to, value, data] tuples
+//	accessList,                   // 5  Array of [address, [storageKeys]] tuples
+//	nonceKey,                     // 6
+//	nonce,                        // 7
+//	validBefore,                  // 8
+//	validAfter,                   // 9
+//	feeToken,                     // 10
+//	feePayerSignatureOrSender,    // 11 Signature [yParity, r, s] or "0x00" or empty
+//	authorizationList,            // 12 Empty array (reserved for EIP-7702)
+//	keyAuthorizationOrSignature,  // 13 (optional) keyAuthorization (list) or signatureEnvelope (bytes)
+//	maybeSignature,               // 14 (optional) signatureEnvelope when field 13 is keyAuthorization
 //
 // ]
+//
+// Field counts:
+//   - 13 fields: unsigned (no keyAuthorization, no signature)
+//   - 14 fields: signed (no keyAuthorization) OR unsigned with keyAuthorization
+//   - 15 fields: signed with keyAuthorization (access keys)
 func Deserialize(serialized string) (*Tx, error) {
 	// Remove 0x prefix if present
 	serialized = strings.TrimPrefix(serialized, "0x")
@@ -70,9 +76,9 @@ func Deserialize(serialized string) (*Tx, error) {
 		return nil, fmt.Errorf("failed to decode RLP: %w", err)
 	}
 
-	// Validate we have the correct number of fields (13 or 14)
-	if len(raw) != 13 && len(raw) != 14 {
-		return nil, fmt.Errorf("invalid RLP structure: expected 13 or 14 fields, got %d", len(raw))
+	// Validate we have the correct number of fields (13, 14, or 15)
+	if len(raw) != 13 && len(raw) != 14 && len(raw) != 15 {
+		return nil, fmt.Errorf("invalid RLP structure: expected 13, 14, or 15 fields, got %d", len(raw))
 	}
 
 	tx := New()
@@ -163,13 +169,24 @@ func Deserialize(serialized string) (*Tx, error) {
 		tx.FeePayerSignature = sig
 	}
 
-	// Field 12: authorizationList (currently empty)
-	// Future: EIP-7702 authorization list support will be added when the spec is finalized.
-	// This field is currently always an empty array in Tempo transactions.
+	// Field 12: authorizationList (reserved for EIP-7702)
 
-	// Field 13: signatureEnvelope (if present)
+	// Fields 13-14: keyAuthorization and/or signatureEnvelope.
+	// Field 13 is disambiguated by RLP type: list = keyAuthorization, bytes = signatureEnvelope.
+	// When keyAuthorization is present, the signature shifts to field 14.
 	if len(raw) > 13 {
-		if sigEnvelopeRaw, ok := raw[13].([]byte); ok && len(sigEnvelopeRaw) > 0 {
+		if keyAuth, isList := raw[13].([]interface{}); isList {
+			tx.KeyAuthorization = keyAuth
+			if len(raw) > 14 {
+				if sigEnvelopeRaw, ok := raw[14].([]byte); ok && len(sigEnvelopeRaw) > 0 {
+					sigEnvelope, err := decodeSignatureEnvelope(sigEnvelopeRaw)
+					if err != nil {
+						return nil, fmt.Errorf("failed to decode signature envelope: %w", err)
+					}
+					tx.Signature = sigEnvelope
+				}
+			}
+		} else if sigEnvelopeRaw, ok := raw[13].([]byte); ok && len(sigEnvelopeRaw) > 0 {
 			sigEnvelope, err := decodeSignatureEnvelope(sigEnvelopeRaw)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decode signature envelope: %w", err)
