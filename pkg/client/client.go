@@ -17,6 +17,7 @@ const (
 	methodSendRawTransaction     = "eth_sendRawTransaction"
 	methodSendRawTransactionSync = "eth_sendRawTransactionSync"
 	defaultTimeout               = 30 * time.Second
+	defaultReceiptPollInterval   = 2 * time.Second
 )
 
 // Client is a basic HTTP client for interacting with the Tempo blockchain.
@@ -273,6 +274,56 @@ func (c *Client) GetBlockNumber(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("unexpected result type: %T", response.Result)
 	}
 	return parseHexUint64(blockNumHex)
+}
+
+// GetTransactionReceipt fetches a receipt by transaction hash.
+// It returns nil when the transaction has not been mined yet.
+func (c *Client) GetTransactionReceipt(ctx context.Context, txHash string) (map[string]interface{}, error) {
+	response, err := c.SendRequest(ctx, "eth_getTransactionReceipt", txHash)
+	if err != nil {
+		return nil, err
+	}
+	if err := response.CheckError(); err != nil {
+		return nil, err
+	}
+	if response.Result == nil {
+		return nil, nil
+	}
+	receipt, ok := response.Result.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected result type: %T", response.Result)
+	}
+	if len(receipt) == 0 {
+		return nil, nil
+	}
+	return receipt, nil
+}
+
+// WaitForReceipt polls until a transaction receipt is available or the context expires.
+// If pollInterval is zero or negative, a default interval is used.
+func (c *Client) WaitForReceipt(ctx context.Context, txHash string, pollInterval time.Duration) (map[string]interface{}, error) {
+	if pollInterval <= 0 {
+		pollInterval = defaultReceiptPollInterval
+	}
+	for {
+		receipt, err := c.GetTransactionReceipt(ctx, txHash)
+		if err != nil {
+			return nil, err
+		}
+		if receipt != nil {
+			return receipt, nil
+		}
+
+		timer := time.NewTimer(pollInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // GetChainID gets the chain ID from the connected node.
