@@ -7,6 +7,8 @@
 // T5 adds TIP-1053 witness APIs for authorizing keys with a bytes32 witness,
 // burning key-authorization witnesses, and checking whether a witness has been
 // burned for an account.
+// T6 adds TIP-1049 admin keys (authorizeAdminKey, isAdminKey) and the
+// SignatureVerifier keychain checks verifyKeychain and verifyKeychainAdmin.
 //
 // # Keychain V2 Signature Format
 //
@@ -59,6 +61,8 @@
 // It provides functions for:
 //   - authorizeKey: Authorize a new access key with restrictions
 //   - authorizeKey with witness: Authorize a new access key with a TIP-1053 witness
+//   - authorizeAdminKey: Authorize a new admin key (T6, no restrictions)
+//   - isAdminKey: Query whether a key is an admin key (T6)
 //   - burnKeyAuthorizationWitness: Burn a TIP-1053 witness without authorizing a key
 //   - isKeyAuthorizationWitnessBurned: Query burned witness state
 //   - revokeKey: Revoke an access key

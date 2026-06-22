@@ -244,6 +244,50 @@ func TestUpdateSpendingLimit_Encodes(t *testing.T) {
 	assertCallSelector(t, call, UpdateSpendingLimitSelector)
 }
 
+func TestAuthorizeAdminKey_Encodes(t *testing.T) {
+	keyID := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	witness := common.HexToHash("0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+
+	call, err := AuthorizeAdminKey(keyID, SignatureTypeSecp256k1, witness)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertCallToKeychain(t, call)
+	assertCallSelector(t, call, AuthorizeAdminKeySelector)
+}
+
+func TestAuthorizeAdminKey_ZeroWitness(t *testing.T) {
+	keyID := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	zeroWitness := common.Hash{}
+
+	call, err := AuthorizeAdminKey(keyID, SignatureTypeSecp256k1, zeroWitness)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertCallToKeychain(t, call)
+	assertCallSelector(t, call, AuthorizeAdminKeySelector)
+
+	const witnessArgOffset = 4 + 32*2
+	if len(call.Data) < witnessArgOffset+32 {
+		t.Fatal("calldata too short for witness argument")
+	}
+	if !bytes.Equal(call.Data[witnessArgOffset:witnessArgOffset+32], zeroWitness.Bytes()) {
+		t.Errorf("expected zero witness to be encoded in the witness argument word")
+	}
+}
+
+func TestIsAdminKey_Encodes(t *testing.T) {
+	account := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	keyID := common.HexToAddress("0x1111111111111111111111111111111111111111")
+
+	call, err := IsAdminKey(account, keyID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertCallToKeychain(t, call)
+	assertCallSelector(t, call, IsAdminKeySelector)
+}
+
 func TestFunctionSelectors_Calls(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -255,6 +299,10 @@ func TestFunctionSelectors_Calls(t *testing.T) {
 		{"AuthorizeKeyWithWitness", AuthorizeKeyWithWitnessSelector, "authorizeKey(address,uint8,(uint64,bool,(address,uint256,uint64)[],bool,(address,(bytes4,address[])[])[]),bytes32)"}, //nolint:lll
 		{"BurnKeyAuthorizationWitness", BurnKeyAuthorizationWitnessSelector, "burnKeyAuthorizationWitness(bytes32)"},
 		{"IsKeyAuthorizationWitnessBurned", IsKeyAuthorizationWitnessBurnedSelector, "isKeyAuthorizationWitnessBurned(address,bytes32)"}, //nolint:lll
+		{"AuthorizeAdminKey", AuthorizeAdminKeySelector, "authorizeAdminKey(address,uint8,bytes32)"},
+		{"IsAdminKey", IsAdminKeySelector, "isAdminKey(address,address)"},
+		{"VerifyKeychain", VerifyKeychainSelector, "verifyKeychain(address,bytes32,bytes)"},
+		{"VerifyKeychainAdmin", VerifyKeychainAdminSelector, "verifyKeychainAdmin(address,bytes32,bytes)"},
 	}
 
 	for _, tt := range tests {

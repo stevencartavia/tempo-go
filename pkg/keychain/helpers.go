@@ -63,6 +63,18 @@ func ParseRemainingLimitResult(result []byte) *big.Int {
 	return new(big.Int).SetBytes(result)
 }
 
+// ParseBoolResult parses a 32-byte ABI-encoded bool return value.
+//
+// Any non-zero result is treated as true.
+func ParseBoolResult(result []byte) bool {
+	for _, b := range result {
+		if b != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // IsKeychainSignature checks if the given signature bytes represent a Keychain signature.
 func IsKeychainSignature(sig []byte) bool {
 	return len(sig) == KeychainSignatureLength && sig[0] == KeychainSignatureType
