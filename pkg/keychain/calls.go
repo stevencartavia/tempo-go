@@ -29,6 +29,13 @@ const BurnKeyAuthorizationWitnessSelector = "0xcff31c46"
 // isKeyAuthorizationWitnessBurned(address,bytes32).
 const IsKeyAuthorizationWitnessBurnedSelector = "0x8e6c7e11"
 
+// AuthorizeAdminKeySelector is the function selector for the T6
+// authorizeAdminKey(address,uint8,bytes32) call.
+const AuthorizeAdminKeySelector = "0x9a424307"
+
+// IsAdminKeySelector is the function selector for isAdminKey(address,address).
+const IsAdminKeySelector = "0x9009a18d"
+
 // SignatureType constants matching the Rust/Solidity enum.
 const (
 	SignatureTypeSecp256k1 = 0
@@ -110,6 +117,12 @@ var burnKeyAuthorizationWitnessABI abi.ABI
 
 // isKeyAuthorizationWitnessBurnedABI is the parsed ABI for isKeyAuthorizationWitnessBurned(address,bytes32).
 var isKeyAuthorizationWitnessBurnedABI abi.ABI
+
+// authorizeAdminKeyABI is the parsed ABI for authorizeAdminKey(address,uint8,bytes32).
+var authorizeAdminKeyABI abi.ABI
+
+// isAdminKeyABI is the parsed ABI for isAdminKey(address,address).
+var isAdminKeyABI abi.ABI
 
 // revokeKeyABI is the parsed ABI for revokeKey(address).
 var revokeKeyABI abi.ABI
@@ -220,6 +233,28 @@ func init() {
 		]
 	}]`)
 
+	authorizeAdminKeyABI = mustParseABI(`[{
+		"name": "authorizeAdminKey",
+		"type": "function",
+		"inputs": [
+			{"name": "keyId", "type": "address"},
+			{"name": "signatureType", "type": "uint8"},
+			{"name": "witness", "type": "bytes32"}
+		]
+	}]`)
+
+	isAdminKeyABI = mustParseABI(`[{
+		"name": "isAdminKey",
+		"type": "function",
+		"inputs": [
+			{"name": "account", "type": "address"},
+			{"name": "keyId", "type": "address"}
+		],
+		"outputs": [
+			{"name": "", "type": "bool"}
+		]
+	}]`)
+
 	revokeKeyABI = mustParseABI(`[{
 		"name": "revokeKey",
 		"type": "function",
@@ -289,6 +324,32 @@ func AuthorizeKeyWithWitness(keyID common.Address, signatureType uint8, restrict
 	data, err := authorizeKeyWithWitnessABI.Pack("authorizeKey", keyID, signatureType, r, witness)
 	if err != nil {
 		return Call{}, fmt.Errorf("failed to encode authorizeKey with witness: %w", err)
+	}
+	return Call{To: keychainAddress, Data: data}, nil
+}
+
+// AuthorizeAdminKey builds an authorizeAdminKey(address,uint8,bytes32) call.
+//
+// Admin keys can manage other keys but carry no spending limits, call scopes,
+// or expiry. A zero witness (bytes32(0)) is valid unless it has already been
+// burned for the caller's account.
+func AuthorizeAdminKey(keyID common.Address, signatureType uint8, witness common.Hash) (Call, error) {
+	data, err := authorizeAdminKeyABI.Pack("authorizeAdminKey", keyID, signatureType, witness)
+	if err != nil {
+		return Call{}, fmt.Errorf("failed to encode authorizeAdminKey: %w", err)
+	}
+	return Call{To: keychainAddress, Data: data}, nil
+}
+
+// IsAdminKey builds an isAdminKey(address,address) call.
+//
+// The call returns true when keyID is an active admin key on account, or when
+// keyID == account (the root key is implicitly admin). Parse the result with
+// ParseBoolResult.
+func IsAdminKey(account common.Address, keyID common.Address) (Call, error) {
+	data, err := isAdminKeyABI.Pack("isAdminKey", account, keyID)
+	if err != nil {
+		return Call{}, fmt.Errorf("failed to encode isAdminKey: %w", err)
 	}
 	return Call{To: keychainAddress, Data: data}, nil
 }
