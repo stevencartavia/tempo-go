@@ -84,6 +84,10 @@ func isT5OrLater() bool {
 	}
 }
 
+func isT6OrLater() bool {
+	return hardfork == "T6"
+}
+
 // testContext encapsulates common test dependencies and helpers
 type testContext struct {
 	t        *testing.T
@@ -961,6 +965,65 @@ func TestIntegration_T5KeyAuthorizationWitness(t *testing.T) {
 		resultBytes := tc.callGetKey(rootAccount.Address(), accessKey.Address())
 		recoveredKeyId := parseKeyInfoKeyId(resultBytes)
 		assert.Equal(t, accessKey.Address(), recoveredKeyId, "getKey returned wrong keyId")
+	})
+}
+
+// TestIntegration_T6KeyAuthorization tests tx-embedded key authorizations (TIP-1049).
+// A root key authorizes another key inside a transaction, instead of via a
+// separate AccountKeychain precompile call.
+func TestIntegration_T6KeyAuthorization(t *testing.T) {
+	if !isT6OrLater() {
+		t.Skip("requires TEMPO_HARDFORK=T6 and a T6-capable RPC")
+	}
+
+	tc := newTestContext(t)
+	rootAccount := tc.createAndFundSigner()
+	t.Logf("Root account: %s", rootAccount.Address().Hex())
+
+	// authorizeViaTx attaches a signed key authorization to a transaction and
+	// sends it, signed by the root key. The authorization must be attached
+	// before the transaction is signed.
+	authorizeViaTx := func(t *testing.T, auth *keychain.KeyAuthorization, msg string) {
+		t.Helper()
+		tx := tc.newTxBuilder().
+			SetNonce(tc.getNonce(rootAccount.Address())).
+			SetGas(600000).
+			AddCall(counterContract, big.NewInt(0), incrementSelector).
+			Build()
+
+		require.NoError(t, auth.SignAndAttach(tx, rootAccount))
+		require.NoError(t, transaction.SignTransaction(tx, rootAccount))
+
+		tc.sendTxExpectSuccess(tx, msg)
+		time.Sleep(3 * time.Second)
+	}
+
+	t.Run("RootAuthorizesAccessKey", func(t *testing.T) {
+		accessKeyPriv, err := crypto.GenerateKey()
+		require.NoError(t, err)
+		accessKey := signer.NewSignerFromKey(accessKeyPriv)
+
+		auth := keychain.NewKeyAuthorization(uint64(tc.chainID), keychain.SignatureTypeSecp256k1, accessKey.Address())
+		authorizeViaTx(t, auth, "tx-embedded key authorization failed")
+
+		resultBytes := tc.callGetKey(rootAccount.Address(), accessKey.Address())
+		assert.Equal(t, accessKey.Address(), parseKeyInfoKeyId(resultBytes),
+			"key not authorized via tx-embedded authorization")
+	})
+
+	t.Run("RootAuthorizesAdminKey", func(t *testing.T) {
+		adminKeyPriv, err := crypto.GenerateKey()
+		require.NoError(t, err)
+		adminKey := signer.NewSignerFromKey(adminKeyPriv)
+
+		// Root-signed admin authorization, bound to the root account.
+		auth := keychain.NewKeyAuthorization(uint64(tc.chainID), keychain.SignatureTypeSecp256k1, adminKey.Address()).
+			IntoAdmin(rootAccount.Address())
+		authorizeViaTx(t, auth, "tx-embedded admin key authorization failed")
+
+		resultBytes := tc.callGetKey(rootAccount.Address(), adminKey.Address())
+		assert.Equal(t, adminKey.Address(), parseKeyInfoKeyId(resultBytes),
+			"admin key not authorized via tx-embedded authorization")
 	})
 }
 

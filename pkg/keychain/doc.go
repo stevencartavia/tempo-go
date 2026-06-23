@@ -70,4 +70,14 @@
 //   - setAllowedCalls: Set or replace call scope restrictions for a key
 //   - removeAllowedCalls: Remove call scope rules for a key+target pair
 //   - getRemainingLimit: Query remaining spending limit
+//
+// # Tx-embedded Key Authorizations (TIP-1049)
+//
+// A root or admin key can authorize another key inside a transaction instead of
+// a separate precompile call. Build a [KeyAuthorization], sign it, and attach it
+// to the transaction:
+//
+//	auth := keychain.NewKeyAuthorization(chainID, keychain.SignatureTypeSecp256k1, keyID).
+//		IntoAdmin(account)
+//	err := auth.SignAndAttach(tx, rootSigner)
 package keychain
