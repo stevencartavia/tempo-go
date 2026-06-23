@@ -63,10 +63,14 @@ func GetSignatureVerifierAddress() common.Address {
 // VerifyKeychain builds a verifyKeychain(address,bytes32,bytes) call.
 //
 // It returns true when signature over digest came from an active access key on
-// account. Only V2 keychain signatures (0x04 || root_account || inner_sig) are
-// accepted. The signature does not bind account into digest, so callers should
-// domain-separate digest (e.g. with chain ID, contract address, account).
-// Parse the result with ParseBoolResult.
+// account. Only V2 keychain signatures are accepted. The envelope embeds an
+// account that is checked against account, so cross-account replay is
+// prevented; digest should still be domain-separated (chain ID, contract,
+// purpose) against other-context replay.
+//
+// The precompile reverts on invalid/legacy/non-keychain signatures, so a false
+// result means a valid signature that failed the account/key check. Callers
+// must handle the eth_call error path, not just ParseBoolResult.
 func VerifyKeychain(account common.Address, digest common.Hash, signature []byte) (Call, error) {
 	data, err := verifyKeychainABI.Pack("verifyKeychain", account, digest, signature)
 	if err != nil {
@@ -79,9 +83,13 @@ func VerifyKeychain(account common.Address, digest common.Hash, signature []byte
 //
 // It returns true when signature over digest came from the root key or an
 // active admin access key on account. Only V2 keychain signatures are accepted.
-// The signature does not bind account into digest, so callers should
-// domain-separate digest (e.g. with chain ID, contract address, account).
-// Parse the result with ParseBoolResult.
+// The envelope embeds an account that is checked against account, so
+// cross-account replay is prevented; digest should still be domain-separated
+// (chain ID, contract, purpose) against other-context replay.
+//
+// The precompile reverts on invalid/legacy/non-keychain signatures, so a false
+// result means a valid signature that failed the account/key check. Callers
+// must handle the eth_call error path, not just ParseBoolResult.
 func VerifyKeychainAdmin(account common.Address, digest common.Hash, signature []byte) (Call, error) {
 	data, err := verifyKeychainAdminABI.Pack("verifyKeychainAdmin", account, digest, signature)
 	if err != nil {

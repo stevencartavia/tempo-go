@@ -331,7 +331,8 @@ func AuthorizeKeyWithWitness(keyID common.Address, signatureType uint8, restrict
 // AuthorizeAdminKey builds an authorizeAdminKey(address,uint8,bytes32) call.
 //
 // Admin keys can manage other keys but carry no spending limits, call scopes,
-// or expiry. A zero witness (bytes32(0)) is valid.
+// or expiry. A zero witness (bytes32(0)) is valid unless it has already been
+// burned for the caller's account.
 func AuthorizeAdminKey(keyID common.Address, signatureType uint8, witness common.Hash) (Call, error) {
 	data, err := authorizeAdminKeyABI.Pack("authorizeAdminKey", keyID, signatureType, witness)
 	if err != nil {

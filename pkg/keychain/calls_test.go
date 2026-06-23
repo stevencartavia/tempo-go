@@ -28,6 +28,24 @@ func assertCallSelector(t *testing.T, call Call, selector string) {
 	}
 }
 
+// assertAddressWord verifies that a 32-byte ABI word encodes addr: the high 12
+// bytes must be zero padding and the trailing 20 bytes must equal addr.
+func assertAddressWord(t *testing.T, word []byte, addr common.Address) {
+	t.Helper()
+	if len(word) != 32 {
+		t.Fatalf("expected 32-byte word, got %d", len(word))
+	}
+	for _, b := range word[:12] {
+		if b != 0 {
+			t.Errorf("expected zero padding in address word, got 0x%s", hex.EncodeToString(word))
+			return
+		}
+	}
+	if !bytes.Equal(word[12:], addr.Bytes()) {
+		t.Errorf("expected address %s in word, got 0x%s", addr.Hex(), hex.EncodeToString(word))
+	}
+}
+
 func TestAuthorizeKey_Encodes(t *testing.T) {
 	keyID := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	kr := NewKeyRestrictions(1000)
@@ -286,6 +304,14 @@ func TestIsAdminKey_Encodes(t *testing.T) {
 	}
 	assertCallToKeychain(t, call)
 	assertCallSelector(t, call, IsAdminKeySelector)
+
+	// Both params are address, so the selector is identical if account/keyID
+	// are swapped. Assert the ABI word order to catch a swap.
+	if len(call.Data) < 4+32*2 {
+		t.Fatal("calldata too short for isAdminKey arguments")
+	}
+	assertAddressWord(t, call.Data[4:36], account)
+	assertAddressWord(t, call.Data[36:68], keyID)
 }
 
 func TestFunctionSelectors_Calls(t *testing.T) {

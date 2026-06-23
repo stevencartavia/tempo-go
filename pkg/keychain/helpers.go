@@ -65,14 +65,26 @@ func ParseRemainingLimitResult(result []byte) *big.Int {
 
 // ParseBoolResult parses a 32-byte ABI-encoded bool return value.
 //
-// Any non-zero result is treated as true.
-func ParseBoolResult(result []byte) bool {
-	for _, b := range result {
+// The result must be exactly 32 bytes, with zero padding and a canonical value
+// byte (0x00 or 0x01); anything else returns an error. This is strict because
+// the result gates authorization checks.
+func ParseBoolResult(result []byte) (bool, error) {
+	if len(result) != 32 {
+		return false, fmt.Errorf("invalid ABI bool result length: expected 32, got %d", len(result))
+	}
+	for _, b := range result[:31] {
 		if b != 0 {
-			return true
+			return false, fmt.Errorf("invalid ABI bool result: non-zero padding")
 		}
 	}
-	return false
+	switch result[31] {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		return false, fmt.Errorf("invalid ABI bool result: value byte is 0x%02x", result[31])
+	}
 }
 
 // IsKeychainSignature checks if the given signature bytes represent a Keychain signature.

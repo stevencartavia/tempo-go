@@ -41,16 +41,34 @@ func TestVerifyKeychainAdmin_Encodes(t *testing.T) {
 func TestParseBoolResult(t *testing.T) {
 	trueWord := make([]byte, 32)
 	trueWord[31] = 1
-	if !ParseBoolResult(trueWord) {
-		t.Error("expected true for ABI-encoded true")
+	if got, err := ParseBoolResult(trueWord); err != nil || !got {
+		t.Errorf("expected (true, nil) for ABI-encoded true, got (%v, %v)", got, err)
 	}
 
 	falseWord := make([]byte, 32)
-	if ParseBoolResult(falseWord) {
-		t.Error("expected false for ABI-encoded false")
+	if got, err := ParseBoolResult(falseWord); err != nil || got {
+		t.Errorf("expected (false, nil) for ABI-encoded false, got (%v, %v)", got, err)
 	}
 
-	if ParseBoolResult(nil) {
-		t.Error("expected false for empty result")
+	// Empty / wrong-length result must be rejected.
+	if _, err := ParseBoolResult(nil); err == nil {
+		t.Error("expected error for empty result")
+	}
+	if _, err := ParseBoolResult(make([]byte, 31)); err == nil {
+		t.Error("expected error for short result")
+	}
+
+	// Non-canonical value byte must be rejected (previously read as true).
+	nonCanonical := make([]byte, 32)
+	nonCanonical[31] = 2
+	if got, err := ParseBoolResult(nonCanonical); err == nil {
+		t.Errorf("expected error for non-canonical value byte, got (%v, nil)", got)
+	}
+
+	// Non-zero padding must be rejected (previously read as true).
+	dirtyPadding := make([]byte, 32)
+	dirtyPadding[0] = 1
+	if got, err := ParseBoolResult(dirtyPadding); err == nil {
+		t.Errorf("expected error for non-zero padding, got (%v, nil)", got)
 	}
 }

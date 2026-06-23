@@ -16,9 +16,10 @@ var adminKeyAuthorizedTopic = common.HexToHash(AdminKeyAuthorizedTopic)
 
 // DecodeAdminKeyAuthorized decodes an AdminKeyAuthorized log.
 //
-// Both account and publicKey are indexed, so they come from the log topics:
-// topics[0] is the event signature, topics[1] is account, topics[2] is publicKey.
-func DecodeAdminKeyAuthorized(topics []common.Hash) (account, publicKey common.Address, err error) {
+// Both account and keyID are indexed: topics[0] is the event signature,
+// topics[1] is account, topics[2] is keyID. keyID is the address-derived key ID
+// (the Solidity event names it publicKey).
+func DecodeAdminKeyAuthorized(topics []common.Hash) (account, keyID common.Address, err error) {
 	if len(topics) != 3 {
 		return common.Address{}, common.Address{}, fmt.Errorf("expected 3 topics, got %d", len(topics))
 	}
@@ -26,6 +27,6 @@ func DecodeAdminKeyAuthorized(topics []common.Hash) (account, publicKey common.A
 		return common.Address{}, common.Address{}, fmt.Errorf("unexpected event topic: %s", topics[0].Hex())
 	}
 	account = common.BytesToAddress(topics[1].Bytes())
-	publicKey = common.BytesToAddress(topics[2].Bytes())
-	return account, publicKey, nil
+	keyID = common.BytesToAddress(topics[2].Bytes())
+	return account, keyID, nil
 }

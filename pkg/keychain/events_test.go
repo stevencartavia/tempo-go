@@ -18,12 +18,12 @@ func TestAdminKeyAuthorizedTopic(t *testing.T) {
 
 func TestDecodeAdminKeyAuthorized(t *testing.T) {
 	account := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	publicKey := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	keyID := common.HexToAddress("0x1111111111111111111111111111111111111111")
 
 	topics := []common.Hash{
 		adminKeyAuthorizedTopic,
 		common.BytesToHash(account.Bytes()),
-		common.BytesToHash(publicKey.Bytes()),
+		common.BytesToHash(keyID.Bytes()),
 	}
 
 	gotAccount, gotKey, err := DecodeAdminKeyAuthorized(topics)
@@ -33,8 +33,8 @@ func TestDecodeAdminKeyAuthorized(t *testing.T) {
 	if gotAccount != account {
 		t.Errorf("expected account %s, got %s", account.Hex(), gotAccount.Hex())
 	}
-	if gotKey != publicKey {
-		t.Errorf("expected publicKey %s, got %s", publicKey.Hex(), gotKey.Hex())
+	if gotKey != keyID {
+		t.Errorf("expected keyID %s, got %s", keyID.Hex(), gotKey.Hex())
 	}
 }
 
