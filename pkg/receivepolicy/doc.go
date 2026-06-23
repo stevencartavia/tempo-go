@@ -7,8 +7,9 @@
 // When an inbound transfer or mint is blocked by a receive policy, the funds are
 // redirected to the ReceivePolicyGuard precompile instead of reverting. The
 // guard holds the funds and emits a TransferBlocked event carrying an
-// ABI-encoded claim receipt. The recovery authority can later claim or burn the
-// blocked funds using that receipt.
+// ABI-encoded claim receipt. The recovery authority can later claim the blocked
+// funds using that receipt (or, for the zero-address authority, the originator
+// can). Holders of the token's burn role can instead burn a blocked receipt.
 //
 // # TIP-403 Registry
 //

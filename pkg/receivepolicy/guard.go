@@ -35,8 +35,10 @@ const ReceiptVersion = 1
 // mint. It is carried (ABI-encoded) in the TransferBlocked event and is required
 // to claim or burn the blocked funds.
 type ClaimReceiptV1 struct {
-	Version           uint8
-	Token             common.Address
+	Version uint8
+	Token   common.Address
+	// RecoveryAuthority may claim the funds; the zero address means the
+	// originator is the claimer.
 	RecoveryAuthority common.Address
 	Originator        common.Address
 	Recipient         common.Address
@@ -160,7 +162,8 @@ func ParseBalanceResult(result []byte) *big.Int {
 }
 
 // Claim builds a claim(address,bytes) call. It releases the blocked funds for
-// receipt to the address to. Only the receipt's recovery authority may claim.
+// receipt to the address to. Only the receipt's recovery authority may claim;
+// when that authority is the zero address, only the originator may claim.
 func Claim(to common.Address, receipt []byte) (Call, error) {
 	data, err := claimABI.Pack("claim", to, receipt)
 	if err != nil {
@@ -170,7 +173,8 @@ func Claim(to common.Address, receipt []byte) (Call, error) {
 }
 
 // BurnBlockedReceipt builds a burnBlockedReceipt(bytes) call. It burns the
-// blocked funds for receipt.
+// blocked funds for receipt. The caller must hold BURN_BLOCKED_ROLE for the
+// receipt's token.
 func BurnBlockedReceipt(receipt []byte) (Call, error) {
 	data, err := burnBlockedReceiptABI.Pack("burnBlockedReceipt", receipt)
 	if err != nil {

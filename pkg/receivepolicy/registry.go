@@ -119,9 +119,10 @@ func GetTIP403RegistryAddress() common.Address {
 // SetReceivePolicy builds a setReceivePolicy(uint64,uint64,address) call.
 //
 // It sets the caller's receive policy. senderPolicyID and tokenFilterID are
-// TIP-403 policy IDs (0 means unset). recoveryAuthority is the address allowed
-// to claim blocked funds; the zero address means blocked funds cannot be
-// recovered.
+// TIP-403 policy IDs; the built-in policies 0 (reject all) and 1 (allow all)
+// are also valid, so use 1 and 1 to effectively disable filtering.
+// recoveryAuthority is who may claim blocked funds: the zero address means the
+// transfer originator, and any nonzero address names that claimer.
 func SetReceivePolicy(senderPolicyID, tokenFilterID uint64, recoveryAuthority common.Address) (Call, error) {
 	data, err := setReceivePolicyABI.Pack("setReceivePolicy", senderPolicyID, tokenFilterID, recoveryAuthority)
 	if err != nil {
