@@ -56,8 +56,12 @@ var (
 	claimABI              abi.ABI
 	burnBlockedReceiptABI abi.ABI
 	// receiptArgs holds the ClaimReceiptV1 fields as flat top-level arguments.
-	// Every field is static, so this encodes identically to the ABI tuple
-	// (struct) encoding emitted on-chain.
+	// This encodes identically to the ABI tuple (struct) encoding emitted
+	// on-chain only because of the all-static V1 layout: with no dynamic field
+	// (bytes/string/dynamic array) there is no leading offset word, so flat
+	// args and a single tuple arg produce the same bytes. A future receipt
+	// version that adds a dynamic field would diverge and need a real tuple.
+	// TestReceiptEncodingMatchesTuple pins this equivalence.
 	receiptArgs abi.Arguments
 )
 
@@ -104,7 +108,18 @@ func GetReceivePolicyGuardAddress() common.Address {
 }
 
 // Encode ABI-encodes the receipt into the witness bytes accepted by the guard.
+// It validates the V1 invariants first (version and enum ranges) so callers
+// fail fast instead of producing a witness the precompile would reject.
 func (r ClaimReceiptV1) Encode() ([]byte, error) {
+	if r.Version != ReceiptVersion {
+		return nil, fmt.Errorf("unsupported receipt version: %d", r.Version)
+	}
+	if r.BlockedReason > BlockedReasonReceivePolicy {
+		return nil, fmt.Errorf("invalid blocked reason: %d", r.BlockedReason)
+	}
+	if r.Kind > InboundKindMint {
+		return nil, fmt.Errorf("invalid inbound kind: %d", r.Kind)
+	}
 	var memo [32]byte
 	copy(memo[:], r.Memo.Bytes())
 	data, err := receiptArgs.Pack(
@@ -156,9 +171,21 @@ func BalanceOf(receipt []byte) (Call, error) {
 	return Call{To: receivePolicyGuardAddress, Data: data}, nil
 }
 
-// ParseBalanceResult parses the 32-byte uint256 result of a balanceOf call.
-func ParseBalanceResult(result []byte) *big.Int {
-	return new(big.Int).SetBytes(result)
+// ParseBalanceResult ABI-decodes the uint256 result of a balanceOf call. The
+// result must be exactly one 32-byte word; ABI unpacking alone would accept
+// trailing garbage for this single static output.
+func ParseBalanceResult(result []byte) (*big.Int, error) {
+	if len(result) != 32 {
+		return nil, fmt.Errorf("invalid balanceOf result length: expected 32, got %d", len(result))
+	}
+	values, err := balanceOfABI.Unpack("balanceOf", result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode balanceOf result: %w", err)
+	}
+	if len(values) != 1 {
+		return nil, fmt.Errorf("expected 1 return value, got %d", len(values))
+	}
+	return values[0].(*big.Int), nil
 }
 
 // Claim builds a claim(address,bytes) call. It releases the blocked funds for

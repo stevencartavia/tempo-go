@@ -73,6 +73,58 @@ func TestDecodeTransferBlocked_WrongTopicCount(t *testing.T) {
 	}
 }
 
+func TestDecodeTransferBlocked_MalformedTopics(t *testing.T) {
+	token := common.HexToAddress("0x20c0000000000000000000000000000000000001")
+	receiver := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	receipt, err := sampleReceipt().Encode()
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+	data, err := transferBlockedDataABI.Pack(big.NewInt(1000), uint8(ReceiptVersion), receipt)
+	if err != nil {
+		t.Fatalf("pack error: %v", err)
+	}
+
+	// Address topic with non-zero high bits must be rejected, not truncated.
+	dirtyAddr := common.BytesToHash(token.Bytes())
+	dirtyAddr[0] = 0xff
+	topics := []common.Hash{
+		transferBlockedTopic,
+		dirtyAddr,
+		common.BytesToHash(receiver.Bytes()),
+		common.BigToHash(big.NewInt(42)),
+	}
+	if _, err := DecodeTransferBlocked(topics, data); err == nil {
+		t.Error("expected error for token topic with non-zero high bits")
+	}
+
+	// Nonce topic that overflows uint64 must be rejected, not truncated.
+	overflow := new(big.Int).Lsh(big.NewInt(1), 65)
+	topics = []common.Hash{
+		transferBlockedTopic,
+		common.BytesToHash(token.Bytes()),
+		common.BytesToHash(receiver.Bytes()),
+		common.BigToHash(overflow),
+	}
+	if _, err := DecodeTransferBlocked(topics, data); err == nil {
+		t.Error("expected error for blockedNonce topic overflowing uint64")
+	}
+}
+
+func TestDecodeReceivePolicyUpdated_MalformedTopic(t *testing.T) {
+	recovery := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	data, err := receivePolicyUpdatedDataABI.Pack(uint64(7), uint64(9), recovery)
+	if err != nil {
+		t.Fatalf("pack error: %v", err)
+	}
+	dirtyAccount := common.BytesToHash(common.HexToAddress("0x5555555555555555555555555555555555555555").Bytes())
+	dirtyAccount[0] = 0xff
+	topics := []common.Hash{receivePolicyUpdatedTopic, dirtyAccount}
+	if _, err := DecodeReceivePolicyUpdated(topics, data); err == nil {
+		t.Error("expected error for account topic with non-zero high bits")
+	}
+}
+
 func TestDecodeReceivePolicyUpdated(t *testing.T) {
 	account := common.HexToAddress("0x5555555555555555555555555555555555555555")
 	recovery := common.HexToAddress("0x1111111111111111111111111111111111111111")

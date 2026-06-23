@@ -36,6 +36,27 @@ func mustArg(typ string) abi.Type {
 	return t
 }
 
+// addressFromTopic extracts an address from an indexed topic, rejecting topics
+// whose high 12 bytes are non-zero rather than silently truncating them.
+func addressFromTopic(topic common.Hash, name string) (common.Address, error) {
+	for _, b := range topic[:12] {
+		if b != 0 {
+			return common.Address{}, fmt.Errorf("%s topic has non-zero high bits: %s", name, topic.Hex())
+		}
+	}
+	return common.BytesToAddress(topic.Bytes()), nil
+}
+
+// uint64FromTopic extracts a uint64 from an indexed topic, rejecting values that
+// overflow 64 bits rather than silently truncating them.
+func uint64FromTopic(topic common.Hash, name string) (uint64, error) {
+	v := topic.Big()
+	if !v.IsUint64() {
+		return 0, fmt.Errorf("%s topic overflows uint64: %s", name, topic.Hex())
+	}
+	return v.Uint64(), nil
+}
+
 func init() {
 	transferBlockedDataABI = abi.Arguments{
 		{Name: "amount", Type: mustArg("uint256")},
@@ -74,10 +95,22 @@ func DecodeTransferBlocked(topics []common.Hash, data []byte) (TransferBlockedEv
 	if err != nil {
 		return TransferBlockedEvent{}, fmt.Errorf("failed to decode TransferBlocked data: %w", err)
 	}
+	token, err := addressFromTopic(topics[1], "token")
+	if err != nil {
+		return TransferBlockedEvent{}, err
+	}
+	receiver, err := addressFromTopic(topics[2], "receiver")
+	if err != nil {
+		return TransferBlockedEvent{}, err
+	}
+	blockedNonce, err := uint64FromTopic(topics[3], "blockedNonce")
+	if err != nil {
+		return TransferBlockedEvent{}, err
+	}
 	return TransferBlockedEvent{
-		Token:          common.BytesToAddress(topics[1].Bytes()),
-		Receiver:       common.BytesToAddress(topics[2].Bytes()),
-		BlockedNonce:   topics[3].Big().Uint64(),
+		Token:          token,
+		Receiver:       receiver,
+		BlockedNonce:   blockedNonce,
 		Amount:         values[0].(*big.Int),
 		ReceiptVersion: values[1].(uint8),
 		Receipt:        values[2].([]byte),
@@ -106,8 +139,12 @@ func DecodeReceivePolicyUpdated(topics []common.Hash, data []byte) (ReceivePolic
 	if err != nil {
 		return ReceivePolicyUpdatedEvent{}, fmt.Errorf("failed to decode ReceivePolicyUpdated data: %w", err)
 	}
+	account, err := addressFromTopic(topics[1], "account")
+	if err != nil {
+		return ReceivePolicyUpdatedEvent{}, err
+	}
 	return ReceivePolicyUpdatedEvent{
-		Account:           common.BytesToAddress(topics[1].Bytes()),
+		Account:           account,
 		SenderPolicyID:    values[0].(uint64),
 		TokenFilterID:     values[1].(uint64),
 		RecoveryAuthority: values[2].(common.Address),

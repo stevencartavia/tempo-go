@@ -1,10 +1,12 @@
 package receivepolicy
 
 import (
+	"bytes"
 	"encoding/hex"
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -99,7 +101,104 @@ func TestDecodeClaimReceiptV1_Invalid(t *testing.T) {
 
 func TestParseBalanceResult(t *testing.T) {
 	encoded := common.BigToHash(big.NewInt(123456)).Bytes()
-	if got := ParseBalanceResult(encoded); got.Cmp(big.NewInt(123456)) != 0 {
+	got, err := ParseBalanceResult(encoded)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Cmp(big.NewInt(123456)) != 0 {
 		t.Errorf("expected 123456, got %s", got)
+	}
+}
+
+func TestParseBalanceResult_Invalid(t *testing.T) {
+	// Short, empty, and oversized (trailing garbage) results must all error
+	// instead of being silently accepted.
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"short", []byte{0x01, 0x02}},
+		{"empty", nil},
+		{"trailing garbage", append(common.BigToHash(big.NewInt(1)).Bytes(), 0xff)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseBalanceResult(tc.data); err == nil {
+				t.Errorf("expected error for %s balance result", tc.name)
+			}
+		})
+	}
+}
+
+func TestEncode_Invalid(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ClaimReceiptV1)
+	}{
+		{"bad version", func(r *ClaimReceiptV1) { r.Version = 2 }},
+		{"bad blocked reason", func(r *ClaimReceiptV1) { r.BlockedReason = 99 }},
+		{"bad kind", func(r *ClaimReceiptV1) { r.Kind = 99 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := sampleReceipt()
+			tc.mutate(&r)
+			if _, err := r.Encode(); err == nil {
+				t.Errorf("expected error for %s", tc.name)
+			}
+		})
+	}
+}
+
+// TestReceiptEncodingMatchesTuple pins the equivalence between the flat-args
+// encoding used by Encode and the canonical single-tuple (struct) encoding the
+// precompile produces on-chain. This holds only because every V1 field is
+// static; if a future version adds a dynamic field this test will fail and the
+// flat encoding will need to become a real tuple.
+func TestReceiptEncodingMatchesTuple(t *testing.T) {
+	r := sampleReceipt()
+	flat, err := r.Encode()
+	if err != nil {
+		t.Fatalf("encode error: %v", err)
+	}
+
+	tupleType, err := abi.NewType("tuple", "", []abi.ArgumentMarshaling{
+		{Name: "version", Type: "uint8"},
+		{Name: "token", Type: "address"},
+		{Name: "recoveryAuthority", Type: "address"},
+		{Name: "originator", Type: "address"},
+		{Name: "recipient", Type: "address"},
+		{Name: "blockedAt", Type: "uint64"},
+		{Name: "blockedNonce", Type: "uint64"},
+		{Name: "blockedReason", Type: "uint8"},
+		{Name: "kind", Type: "uint8"},
+		{Name: "memo", Type: "bytes32"},
+	})
+	if err != nil {
+		t.Fatalf("tuple type error: %v", err)
+	}
+	tupleArgs := abi.Arguments{{Name: "receipt", Type: tupleType}}
+
+	var memo [32]byte
+	copy(memo[:], r.Memo.Bytes())
+	tuple, err := tupleArgs.Pack(struct {
+		Version           uint8
+		Token             common.Address
+		RecoveryAuthority common.Address
+		Originator        common.Address
+		Recipient         common.Address
+		BlockedAt         uint64
+		BlockedNonce      uint64
+		BlockedReason     uint8
+		Kind              uint8
+		Memo              [32]byte
+	}{
+		r.Version, r.Token, r.RecoveryAuthority, r.Originator, r.Recipient,
+		r.BlockedAt, r.BlockedNonce, r.BlockedReason, r.Kind, memo,
+	})
+	if err != nil {
+		t.Fatalf("tuple pack error: %v", err)
+	}
+
+	if !bytes.Equal(flat, tuple) {
+		t.Errorf("flat and tuple encodings differ:\n flat:  %x\n tuple: %x", flat, tuple)
 	}
 }
